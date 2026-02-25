@@ -1,6 +1,6 @@
 import json
 from openai import AsyncOpenAI
-from app.schemas import RecipeRequest, SpecialsRequest, RecipeResponse, SpecialsResponse
+from app.schemas import RecipeRequest, RecipeResponse, SpecialsRequest, SpecialsResponse
 from app.prompts import RECIPE_SYSTEM_PROMPT, SPECIALS_SYSTEM_PROMPT
 
 class KitchenAI:
@@ -14,29 +14,19 @@ class KitchenAI:
         user_content = f"Request: {data.prompt}\nAvailable Ingredients: {ing_list}\nConstraints: {data.constraints}"
 
         response = await self.client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o", 
             messages=[
                 {"role": "system", "content": RECIPE_SYSTEM_PROMPT},
                 {"role": "user", "content": user_content}
             ],
-            response_format={"type": "json_object"},
+            response_format={"type": "json_object"}, # This forces JSON mode
             temperature=0.7
         )
         
-        result = json.loads(response.choices[0].message.content)
+        content = response.choices[0].message.content
+        
+        # Debugging: Print what AI actually sent if it fails again
+        print(f"DEBUG AI RESPONSE: {content}") 
+
+        result = json.loads(content)
         return RecipeResponse(**result)
-
-    async def suggest_specials(self, data: SpecialsRequest) -> SpecialsResponse:
-        user_content = f"Expiring Items: {', '.join(data.expiring_items)}\nSeason: {data.season}"
-
-        response = await self.client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": SPECIALS_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content}
-            ],
-            response_format={"type": "json_object"}
-        )
-
-        result = json.loads(response.choices[0].message.content)
-        return SpecialsResponse(**result)
