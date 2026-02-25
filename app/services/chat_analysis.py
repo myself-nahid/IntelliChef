@@ -1,3 +1,4 @@
+import json
 from openai import AsyncOpenAI
 from app.schemas import ChatRequest, ChatResponse
 from app.prompts import CHAT_SYSTEM_PROMPT
@@ -16,7 +17,21 @@ class OperationsAI:
         response = await self.client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
+            response_format={"type": "json_object"}, 
             temperature=0.3 
         )
 
-        return ChatResponse(answer=response.choices[0].message.content)
+        content = response.choices[0].message.content
+
+        try:
+            # 1. Parse the AI's JSON string into a Python Dictionary
+            result = json.loads(content)
+            
+            # 2. Extract just the "answer" text
+            final_answer = result.get("answer", content)
+            
+            return ChatResponse(answer=final_answer)
+            
+        except json.JSONDecodeError:
+            # Fallback: If AI didn't return valid JSON, just return raw text
+            return ChatResponse(answer=content)
