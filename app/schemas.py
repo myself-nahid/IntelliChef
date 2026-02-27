@@ -1,15 +1,16 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional
 
-# RECIPE GENERATION
+# RECIPE GENERATION 
 class IngredientInput(BaseModel):
     name: str
-    stock_status: Optional[str] = "OK"  # e.g., "OK", "Low", "Waste Risk"
+    stock_status: Optional[str] = "OK"
 
 class RecipeRequest(BaseModel):
-    prompt: str  # User's request, e.g. "Spicy pasta"
-    available_ingredients: List[IngredientInput] # Backend sends this list
-    constraints: Optional[str] = None # e.g. "No gluten"
+    prompt: str 
+    available_ingredients: List[IngredientInput] 
+    constraints: Optional[str] = None
+    language: str = "English"  
 
 class IngredientOutput(BaseModel):
     name: str
@@ -21,12 +22,12 @@ class RecipeResponse(BaseModel):
     description: str
     steps: List[str]
     ingredients: List[IngredientOutput]
-    # Note: return quantities. The backend calculates cost.
 
-# DAILY SPECIALS
+# DAILY SPECIALS 
 class SpecialsRequest(BaseModel):
-    expiring_items: List[str] # Backend sends ["Tomato", "Milk"]
-    season: str = "Summer"
+    expiring_items: List[str]
+    season: str = "Any"
+    language: str = "English" 
 
 class SpecialItem(BaseModel):
     dish_name: str
@@ -39,9 +40,8 @@ class SpecialsResponse(BaseModel):
 # CHAT / Q&A 
 class ChatRequest(BaseModel):
     question: str
-    # The Backend Developer must perform the DB search FIRST and send the context
     context_data: str 
-    # Example context_data: "Salmon Price: $20/kg, Supplier: FishCo. Stock: 5kg."
+    language: str = "English" 
 
 class ChatResponse(BaseModel):
     answer: str
