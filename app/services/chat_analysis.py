@@ -1,10 +1,9 @@
-# app/services/chat_analysis.py
 import json
 from openai import AsyncOpenAI
 from app.schemas import ChatRequest, ChatResponse
 from app.prompts import CHAT_SYSTEM_PROMPT
 
-# --- DEFINE THE TOOLS (The Capabilities) ---
+# DEFINE THE TOOLS (The Capabilities)
 # This tells the AI what data it can ask for.
 TOOLS_SCHEMA = [
     {
