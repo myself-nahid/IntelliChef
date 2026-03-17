@@ -3,11 +3,6 @@ from typing import List, Optional, Literal, Union, Any
 from typing_extensions import Annotated
 from pydantic import Field
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SHARED — uniform API envelope for every endpoint
-# ══════════════════════════════════════════════════════════════════════════════
-
 class APIResponse(BaseModel):
     """
     Every endpoint returns this wrapper.
@@ -23,11 +18,6 @@ class APIResponse(BaseModel):
     data: Optional[Any] = None
     error: Optional[str] = None
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# RECIPE — Request
-# ══════════════════════════════════════════════════════════════════════════════
-
 class IngredientInput(BaseModel):
     name: str
     stock_status: Optional[str] = "OK"
@@ -39,17 +29,18 @@ class IngredientInput(BaseModel):
     is_special: Optional[bool] = None
     status: Optional[str] = None
 
+class ChatMessage(BaseModel):
+    """A single turn in the conversation history."""
+    role: Literal["user", "assistant"]
+    content: str
 
 class RecipeRequest(BaseModel):
     prompt: str
     available_ingredients: List[IngredientInput] = []
     constraints: Optional[str] = None
     language: str = "English"
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# RECIPE — Ingredient output
-# ══════════════════════════════════════════════════════════════════════════════
+    # Last 10 turns (user + assistant pairs). Oldest first, newest last.
+    history: List[ChatMessage] = []
 
 class IngredientOutput(BaseModel):
     name: str
@@ -78,26 +69,25 @@ class IngredientOutput(BaseModel):
                 return v.strip()   # keep "to taste", "as needed", etc.
         return v
 
-    def model_dump(self, **kwargs):
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler, info):
         """
-        Custom serialisation:
-        - Omit quantity (and unit) when the value is 0.0 — pantry staples that
-          the AI encoded as quantity:0 / unit:"to taste".  Replace with
-          quantity: null, unit: "to taste" so the frontend can render cleanly.
-        - Strip any field whose value is None (exclude_none behaviour per field).
+        Always called by Pydantic during serialisation — even when triggered
+        by a parent model_dump(). Converts quantity=0.0 (AI encoding for
+        'to taste') into quantity=null so the frontend renders it cleanly.
         """
-        d = super().model_dump(**kwargs)
+        d = handler(self)
         if d.get("quantity") == 0.0:
             d["quantity"] = None
             d.setdefault("unit", "to taste")
-        return {k: v for k, v in d.items() if v is not None or k in ("quantity",)}
+        # Remove keys that are None, but always keep "name" and "quantity"
+        return {k: v for k, v in d.items() if v is not None or k in ("name", "quantity")}
 
 
 class SubstitutionNote(BaseModel):
     original: str
     used_instead: str
     reason: str
-
 
 class MissingIngredient(BaseModel):
     name: str
@@ -106,11 +96,6 @@ class MissingIngredient(BaseModel):
     suggested_substitute: Optional[str] = None
     shopping_note: Optional[str] = None
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# RECIPE — Inventory summary (built in service layer, never sent to AI)
-# ══════════════════════════════════════════════════════════════════════════════
-
 class InventorySummary(BaseModel):
     total_inventory_items: int
     items_used_in_recipe: List[str]
@@ -118,12 +103,6 @@ class InventorySummary(BaseModel):
     pantry_staples_used: List[str]
     missing_critical: List[str]
     missing_optional: List[str]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# RECIPE — Strongly-typed per-kind payloads  (what goes inside data{})
-# Using separate models per kind eliminates null pollution entirely.
-# ══════════════════════════════════════════════════════════════════════════════
 
 class RecipeData(BaseModel):
     """
@@ -154,24 +133,16 @@ class GeneralData(BaseModel):
     original_request: str
     answer: str
 
-
 class OffTopicData(BaseModel):
     """Returned when the question is unrelated to food/cooking."""
     original_request: str
     answer: str
     note: Optional[str] = None
 
-
 class ErrorData(BaseModel):
     """Returned when the request cannot be fulfilled."""
     original_request: str
     error_message: str
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# INTERNAL AI response models  (used only inside recipe_generator.py)
-# Prefixed with _ to signal: never expose these to the client.
-# ══════════════════════════════════════════════════════════════════════════════
 
 class _RecipeAI(BaseModel):
     type: Literal["recipe"]
@@ -190,32 +161,23 @@ class _RecipeAI(BaseModel):
     steps: List[str]
     tips: Optional[str] = None
 
-
 class _GeneralAI(BaseModel):
     type: Literal["general"]
     answer: str
-
 
 class _OffTopicAI(BaseModel):
     type: Literal["off_topic"]
     answer: str
     note: Optional[str] = None
 
-
 class _ErrorAI(BaseModel):
     type: Literal["error"]
     message: str
-
 
 _AIResponse = Annotated[
     Union[_RecipeAI, _GeneralAI, _OffTopicAI, _ErrorAI],
     Field(discriminator="type")
 ]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SPECIALS — Request
-# ══════════════════════════════════════════════════════════════════════════════
 
 class SpecialsRequest(BaseModel):
     prompt: Optional[str] = None
@@ -225,11 +187,8 @@ class SpecialsRequest(BaseModel):
     target_audience: Optional[str] = None
     constraints: Optional[str] = None
     language: str = "English"
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# SPECIALS — Internal AI response models
-# ══════════════════════════════════════════════════════════════════════════════
+    # Last 10 turns (user + assistant pairs). Oldest first, newest last.
+    history: List[ChatMessage] = []
 
 class SpecialDish(BaseModel):
     dish_name: str
@@ -242,13 +201,11 @@ class SpecialDish(BaseModel):
     waste_recovery_note: Optional[str] = None
     chef_tip: Optional[str] = None
 
-
 class _SpecialsAI(BaseModel):
     type: Literal["specials"]
     season: Optional[str] = None
     total_expiring_items_used: Optional[int] = None
     suggestions: List[SpecialDish]
-
 
 class _SpecialsAdviceAI(BaseModel):
     type: Literal["menu_advice"]
@@ -256,23 +213,19 @@ class _SpecialsAdviceAI(BaseModel):
     answer: str
     action_items: Optional[List[str]] = None
 
-
 class _SpecialsGeneralAI(BaseModel):
     type: Literal["general"]
     answer: str
-
 
 class _SpecialsOffTopicAI(BaseModel):
     type: Literal["off_topic"]
     answer: str
     redirect: Optional[str] = None
 
-
 class _SpecialsErrorAI(BaseModel):
     type: Literal["error"]
     message: str
     suggestion: Optional[str] = None
-
 
 _SpecialsAIResponse = Annotated[
     Union[
@@ -282,16 +235,13 @@ _SpecialsAIResponse = Annotated[
     Field(discriminator="type")
 ]
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CHAT — Request & Response
-# ══════════════════════════════════════════════════════════════════════════════
-
 class ChatRequest(BaseModel):
     question: str
     context_data: str
     language: str = "English"
-
+    # Last 10 turns (user + assistant pairs). Oldest first, newest last.
+    # The backend is responsible for trimming to max 10 before sending.
+    history: List[ChatMessage] = []
 
 class ChatResponse(BaseModel):
     answer: str
