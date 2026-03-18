@@ -41,10 +41,14 @@ SPECIALS_MESSAGES = {
 DIFFICULTY_EMOJI = {"easy": "🟢", "medium": "🟡", "hard": "🔴"}
 SOURCE_LABEL     = {"inventory": "✅", "substitute": "🔄", "pantry_staple": "🧂"}
 
+# UTILITIES
 def _build_history_messages(history) -> list[dict]:
-    """Converts ChatMessage history into OpenAI message dicts, trimmed to MAX turns."""
     trimmed = history[-(MAX_HISTORY_TURNS * 2):]
     return [{"role": msg.role, "content": msg.content} for msg in trimmed]
+
+
+def _safe_get(d, key, default=""):
+    return d.get(key) or default
 
 
 def _build_ingredient_block(data: RecipeRequest) -> str:
@@ -228,10 +232,54 @@ def _to_markdown_response(data: RecipeRequest, ai_raw) -> tuple[str, str, bool]:
     return f"> {getattr(ai_raw, 'message', 'Unknown error.')}", "Could not process request.", False
 
 
+# Specials Helpers 
+def _specials_to_markdown(data: dict) -> str:
+    lines = []
+
+    lines.append(f"# 🍽️ Daily Specials ({data.get('season', '')})")
+    lines.append("")
+    lines.append(f"**Total Expiring Items Used:** {data.get('total_expiring_items_used', 0)}")
+    lines.append("")
+
+    for i, dish in enumerate(data.get("suggestions", []), 1):
+        lines.append(f"## {i}. {_safe_get(dish, 'dish_name')}")
+        lines.append("")
+
+        lines.append(f"- **Course:** {_safe_get(dish, 'course')}")
+        lines.append(f"- **Cooking Method:** {_safe_get(dish, 'cooking_method')}")
+        lines.append(f"- **Prep Time:** {_safe_get(dish, 'estimated_prep_time_minutes')} min")
+        lines.append(f"- **Difficulty:** {_safe_get(dish, 'difficulty')}")
+        lines.append("")
+
+        lines.append("### 📖 Description")
+        lines.append(_safe_get(dish, "description"))
+        lines.append("")
+
+        lines.append("### 🧾 Ingredients")
+        for ing in dish.get("key_ingredients_used", []):
+            lines.append(f"- {ing}")
+        lines.append("")
+
+        lines.append("### ♻️ Waste Recovery")
+        lines.append(_safe_get(dish, "waste_recovery_note"))
+        lines.append("")
+
+        if dish.get("chef_tip"):
+            lines.append("### 👨‍🍳 Chef Tip")
+            lines.append(dish["chef_tip"])
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+# MAIN CLASS
 class KitchenAI:
     def __init__(self, api_key: str):
         self.client = AsyncOpenAI(api_key=api_key)
 
+    # RECIPE
     async def generate_recipe(self, data: RecipeRequest) -> APIResponse:
 
         messages = [
@@ -303,6 +351,7 @@ class KitchenAI:
             data={"markdown": markdown},
         )
 
+    # SPECIALS
     async def suggest_specials(self, data: SpecialsRequest) -> APIResponse:
 
         messages = [
@@ -315,15 +364,15 @@ class KitchenAI:
             }
         ]
         messages.extend(_build_history_messages(data.history))
+
         messages.append({
             "role": "user",
             "content": (
-                f"Request: {data.prompt or 'Suggest daily specials for the expiring items.'}\n\n"
-                f"Expiring Items: {', '.join(data.expiring_items) or 'None provided'}\n"
-                f"Season: {data.season}\n"
+                f"User Message: {data.prompt or '(no message — generate specials from expiring items)'}\n\n"
+                f"Expiring Items: {', '.join(data.expiring_items) if data.expiring_items else 'None'}\n"
                 f"Cuisine Style: {data.cuisine_style or 'Any'}\n"
                 f"Target Audience: {data.target_audience or 'General'}\n"
-                f"Constraints: {data.constraints or 'None'}"
+                f"Constraints: {data.constraints or 'None'}\n"
             ),
         })
 
@@ -331,30 +380,27 @@ class KitchenAI:
             model="gpt-4o",
             messages=messages,
             response_format={"type": "json_object"},
-            temperature=0.7,
         )
 
-        content = response.choices[0].message.content
-
-        try:
-            raw = json.loads(content)
-        except json.JSONDecodeError:
-            return APIResponse(success=False, message="AI returned malformed JSON.", error="JSONDecodeError")
-
+        raw = json.loads(response.choices[0].message.content)
         response_type = raw.get("type", "error")
-
-        if response_type not in SPECIALS_TYPE_MAP:
-            return APIResponse(success=False, message="Unexpected AI response type.", error=f"Unknown type: {response_type}")
 
         try:
             ai_model = SPECIALS_TYPE_MAP[response_type](**raw)
-        except ValidationError as e:
-            print(f"\n SPECIALS SCHEMA MISMATCH\nType: {response_type}\n"
-                  f"AI output:\n{json.dumps(raw, indent=2)}\nError:\n{e}")
-            return APIResponse(success=False, message="AI response schema mismatch.", error=str(e))
+        except ValidationError:
+            return APIResponse(success=False, message="Schema error")
+
+        structured = ai_model.model_dump(exclude={"type"}, exclude_none=True)
+
+        if response_type == "specials":
+            markdown = _specials_to_markdown(structured)
+        elif response_type in ["menu_advice", "general", "off_topic"]:
+            markdown = getattr(ai_model, "answer", "> Error")
+        else:
+            markdown = f"> {getattr(ai_model, 'message', 'Unknown error')}"
 
         return APIResponse(
             success=response_type != "error",
-            message=SPECIALS_MESSAGES.get(response_type, "Response generated."),
-            data=ai_model.model_dump(exclude={"type"}, exclude_none=True),
+            message=SPECIALS_MESSAGES.get(response_type),
+            data={"markdown": markdown}
         )
